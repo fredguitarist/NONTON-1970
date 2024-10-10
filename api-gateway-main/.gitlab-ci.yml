@@ -1,0 +1,111 @@
+image: docker:20
+services:
+  - name: docker:dind
+    alias: docker
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  FF_NETWORK_PER_BUILD: "true"
+  DOCKER_TLS_CERTDIR: ""
+
+stages:
+  - build-dev
+  - build-release
+  - build-prod
+  - deploy-dev
+  - deploy-release
+  - deploy-prod
+
+build-dev:
+  stage: build-dev
+  tags:
+    - docker
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | docker login "$NEXUS_HOST" --username "$REGISTRY_USER" --password-stdin
+  script:
+    - docker build --build-arg ssh_prv_key="$NONTON_GITLAB_BUILD_KEY" --build-arg IMAGE="$NEXUS_HOST/$REGISTRY_BASE_IMAGE:latest"
+      -t $NEXUS_HOST/$REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA-dev -t $NEXUS_HOST/$REGISTRY_IMAGE:latest -f docker/Dockerfile-dev .
+    - docker image push $NEXUS_HOST/$REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA-dev
+    - docker image push $NEXUS_HOST/$REGISTRY_IMAGE:latest
+  after_script:
+    - docker logout
+  only:
+    - develop
+build-release:
+  stage: build-release
+  tags:
+    - docker
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | docker login "$NEXUS_HOST" --username "$REGISTRY_USER" --password-stdin
+  script:
+    - docker build --build-arg ssh_prv_key="$YR_GITLAB_BUILD_KEY" --build-arg IMAGE="$NEXUS_HOST/$REGISTRY_BASE_IMAGE:latest"
+      -t $NEXUS_HOST/$REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA -t $NEXUS_HOST/$REGISTRY_IMAGE:stable -f docker/Dockerfile .
+    - docker image push $NEXUS_HOST/$REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+    - docker image push $NEXUS_HOST/$REGISTRY_IMAGE:stable
+  after_script:
+    - docker logout
+  only:
+    - /^release\/[\d\.]+$/
+build-prod:
+  stage: build-prod
+  tags:
+    - docker
+  before_script:
+    - echo "$YANDEX_PASSWORD" | docker login "$YANDEX_HOST" --username "$YANDEX_USER" --password-stdin
+  script:
+    - docker build --build-arg ssh_prv_key="$NONTON_GITLAB_BUILD_KEY" --build-arg IMAGE="$YANDEX_HOST/$YANDEX_BASE_IMAGE:stable"
+      -t $YANDEX_HOST/$YANDEX_IMAGE:$CI_COMMIT_SHORT_SHA
+      -t $YANDEX_HOST/$YANDEX_IMAGE:stable -f docker/Dockerfile .
+    - docker image push $YANDEX_HOST/$YANDEX_IMAGE:$CI_COMMIT_SHORT_SHA
+    - docker image push $YANDEX_HOST/$YANDEX_IMAGE:stable
+  after_script:
+    - docker logout
+  only:
+    - main
+  when: manual
+deploy-dev:
+  stage: deploy-dev
+  needs: ["build-dev"]
+  before_script:
+    - apk add openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir ~/.ssh
+    - chmod 700 ~/.ssh
+  script:
+    - ssh -o StrictHostKeyChecking=no $SSH_USER@192.168.100.124 "cd /opt/nonton/docker-compose; make build-dev"
+  only:
+    - develop
+  tags:
+    - docker
+  when: on_success
+deploy-release:
+  stage: deploy-release
+  before_script:
+    - apk add openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir ~/.ssh
+    - chmod 700 ~/.ssh
+  script:
+    - ssh -o StrictHostKeyChecking=no $SSH_USER@192.168.100.124 "cd /opt/nonton/docker-compose; make build-dev"
+  only:
+    - /^release\/[\d\.]+$/
+  tags:
+    - docker
+  when: manual
+deploy-prod:
+  stage: deploy-prod
+  needs: ["build-prod"]
+  before_script:
+    - apk add openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir ~/.ssh
+    - chmod 700 ~/.ssh
+  script:
+    - ssh -o StrictHostKeyChecking=no $SSH_PROD_USER@158.160.74.244 "sudo su; cd /opt/nonton/deploy-in-compose; sudo make install; exit; exit"
+  only:
+    - main
+  tags:
+    - docker
+  when: manual
