@@ -21,3 +21,6 @@ COPY ./nginx/nginx.conf ./nginx.conf
 COPY ./nginx/s1_admin.conf ./conf.d/s1_admin.conf
 
 COPY ./nginx/s2_cms.conf ./conf.d/s2_cms.conf
+
+COPY ./common/locations/200_root_front.conf ./common/locations/200_mebel.conf
+
